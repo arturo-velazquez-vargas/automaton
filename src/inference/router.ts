@@ -104,7 +104,12 @@ export class InferenceRouter {
 
     // 5. Build inference options
     const preference = this.getPreference(tier, taskType);
-    const maxTokens = request.maxTokens || preference?.maxTokens || model.maxTokens;
+    // WHY: thinking tokens count toward max_tokens on Claude, so the matrix's
+    // small OpenAI-era caps would truncate replies. Use the configured per-turn cap.
+    const maxTokens =
+      request.maxTokens ||
+      (model.provider === "anthropic" ? this.budget.config.maxTokensPerTurn : preference?.maxTokens) ||
+      model.maxTokens;
     const timeout = TASK_TIMEOUTS[taskType] || 120_000;
 
     const inferenceOptions: any = {
@@ -196,8 +201,33 @@ export class InferenceRouter {
 
     const tierRank = TIER_ORDER[tier] ?? 0;
 
-    // 1. Try routing-matrix candidates
+    // A tier whose matrix row has no candidates for this task (dead tier, or
+    // non-essential work while critical) runs no inference at all.
     const preference = this.getPreference(tier, taskType);
+    if (preference && preference.candidates.length === 0) {
+      return null;
+    }
+
+    // 1. Creator-configured models come first.
+    // WHY: the routing matrix below is a hardcoded OpenAI list. A creator who
+    // configured Anthropic or Ollama must get those models, not a silent
+    // fallback to a provider they have no key for.
+    const strategy = this.budget.config;
+    const configuredIds: (string | undefined)[] =
+      tier === "critical" || tier === "dead"
+        ? [strategy.criticalModel]
+        : tier === "low_compute"
+          ? [strategy.lowComputeModel]
+          : [strategy.inferenceModel];
+    for (const modelId of configuredIds) {
+      if (!modelId) continue;
+      const entry = this.registry.get(modelId);
+      if (entry && entry.enabled) {
+        return entry;
+      }
+    }
+
+    // 2. Routing-matrix candidates
     if (preference && preference.candidates.length > 0) {
       for (const candidateId of preference.candidates) {
         const entry = this.registry.get(candidateId);
@@ -207,9 +237,7 @@ export class InferenceRouter {
       }
     }
 
-    // 2. Fall back to user-configured models.
-    //    This handles local/Ollama setups where routing-matrix models are absent.
-    const strategy = this.budget.config;
+    // 3. Any configured model whose tier allows it (Ollama setups).
     const fallbackIds: (string | undefined)[] =
       tier === "critical" || tier === "dead"
         ? [strategy.criticalModel, strategy.inferenceModel, strategy.lowComputeModel]

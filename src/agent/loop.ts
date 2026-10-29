@@ -27,6 +27,7 @@ import type {
 import { DEFAULT_MODEL_STRATEGY_CONFIG } from "../types.js";
 import type { PolicyEngine } from "./policy-engine.js";
 import type { ApprovalGate } from "../approval/gate.js";
+import { filterToolsForLocalMode } from "../local/tool-filter.js";
 import { buildSystemPrompt, buildWakeupPrompt } from "./system-prompt.js";
 import { buildContextMessages, trimContext } from "./context.js";
 import {
@@ -100,7 +101,10 @@ export async function runAgentLoop(
 
   const builtinTools = createBuiltinTools(identity.sandboxId);
   const installedTools = loadInstalledTools(db);
-  const tools = [...builtinTools, ...installedTools];
+  const isLocalMode = config.runtimeMode !== "conway";
+  const tools = isLocalMode
+    ? filterToolsForLocalMode([...builtinTools, ...installedTools])
+    : [...builtinTools, ...installedTools];
   const toolContext: ToolContext = {
     identity,
     config,
@@ -132,7 +136,9 @@ export async function runAgentLoop(
   let orchestrator: Orchestrator | undefined;
   let workerPool: LocalWorkerPool | undefined;
 
-  if (hasTable(db.raw, "goals")) {
+  // WHY: the orchestrator runs on the OpenAI-compatible unified client, which
+  // has no Anthropic provider. Local mode runs single-agent until that exists.
+  if (!isLocalMode && hasTable(db.raw, "goals")) {
     try {
       planModeController = new PlanModeController(db.raw);
 

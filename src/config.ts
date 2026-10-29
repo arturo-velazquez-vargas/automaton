@@ -6,8 +6,8 @@
 
 import fs from "fs";
 import path from "path";
-import type { AutomatonConfig, TreasuryPolicy, ModelStrategyConfig, SoulConfig, ApprovalConfig } from "./types.js";
-import { DEFAULT_CONFIG, DEFAULT_TREASURY_POLICY, DEFAULT_MODEL_STRATEGY_CONFIG, DEFAULT_SOUL_CONFIG, DEFAULT_APPROVAL_CONFIG } from "./types.js";
+import type { AutomatonConfig, TreasuryPolicy, ModelStrategyConfig, SoulConfig, ApprovalConfig, LocalRuntimeConfig } from "./types.js";
+import { DEFAULT_CONFIG, DEFAULT_TREASURY_POLICY, DEFAULT_MODEL_STRATEGY_CONFIG, DEFAULT_SOUL_CONFIG, DEFAULT_APPROVAL_CONFIG, DEFAULT_LOCAL_CONFIG, DEFAULT_RUNTIME_MODE } from "./types.js";
 import { getAutomatonDir } from "./identity/wallet.js";
 import { loadApiKeyFromConfig } from "./identity/provision.js";
 import { createLogger } from "./observability/logger.js";
@@ -67,6 +67,11 @@ export function loadConfig(): AutomatonConfig | null {
       ...(raw.approval ?? {}),
     };
 
+    const local: LocalRuntimeConfig = {
+      ...DEFAULT_LOCAL_CONFIG,
+      ...(raw.local ?? {}),
+    };
+
     return {
       ...DEFAULT_CONFIG,
       ...raw,
@@ -79,6 +84,8 @@ export function loadConfig(): AutomatonConfig | null {
       modelStrategy,
       soulConfig,
       approval,
+      local,
+      runtimeMode: raw.runtimeMode === "conway" ? "conway" : DEFAULT_RUNTIME_MODE,
       chainType: raw.chainType || "evm",
     } as AutomatonConfig;
   } catch {
@@ -103,6 +110,8 @@ export function saveConfig(config: AutomatonConfig): void {
     modelStrategy: config.modelStrategy ?? DEFAULT_MODEL_STRATEGY_CONFIG,
     soulConfig: config.soulConfig ?? DEFAULT_SOUL_CONFIG,
     approval: config.approval ?? DEFAULT_APPROVAL_CONFIG,
+    runtimeMode: config.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+    local: config.local ?? DEFAULT_LOCAL_CONFIG,
   };
   fs.writeFileSync(configPath, JSON.stringify(toSave, null, 2), {
     mode: 0o600,

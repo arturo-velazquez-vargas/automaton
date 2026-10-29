@@ -279,19 +279,21 @@ async function chatViaAnthropic(params: {
   const body: Record<string, unknown> = {
     model: params.model,
     max_tokens: params.tokenLimit,
+    // WHY: an idle turn with no pending input and no persisted history yields
+    // only a system prompt. Anthropic requires at least one user message, so
+    // the agent is nudged to continue instead of failing the turn.
     messages:
       transformed.messages.length > 0
         ? transformed.messages
-        : (() => { throw new Error("Cannot send empty message array to Anthropic API"); })(),
+        : [{ role: "user", content: "[system] No new input. Continue with your current goals." }],
   };
 
   if (transformed.system) {
     body.system = transformed.system;
   }
 
-  if (params.temperature !== undefined) {
-    body.temperature = params.temperature;
-  }
+  // WHY: current Claude models reject non-default sampling parameters with a
+  // 400, so `temperature` is intentionally not forwarded to Anthropic.
 
   if (params.tools && params.tools.length > 0) {
     body.tools = params.tools.map((tool) => ({
@@ -320,6 +322,10 @@ async function chatViaAnthropic(params: {
 
   const data = await resp.json() as any;
   const content = Array.isArray(data.content) ? data.content : [];
+  if (data.stop_reason === "refusal") {
+    const category = data.stop_details?.category ?? "unknown";
+    throw new Error(`Anthropic declined the request (refusal, category: ${category})`);
+  }
   const textBlocks = content.filter((c: any) => c?.type === "text");
   const toolUseBlocks = content.filter((c: any) => c?.type === "tool_use");
 

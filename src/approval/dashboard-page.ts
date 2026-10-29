@@ -101,7 +101,8 @@ export const DASHBOARD_HTML = `<!doctype html>
 
   function refresh() {
     fetch("/api/state").then(function (res) { return res.json(); }).then(function (state) {
-      statusEl.textContent = state.pending.length + " pending · " + state.agentState + " · updated " + new Date().toLocaleTimeString();
+      var balance = state.balanceCents == null ? "" : " · balance $" + (state.balanceCents / 100).toFixed(2);
+      statusEl.textContent = state.pending.length + " pending · " + state.agentState + balance + " · updated " + new Date().toLocaleTimeString();
       var ids = state.pending.map(function (r) { return r.id; }).join(",");
       if (ids !== lastPendingIds) { renderPending(state.pending); lastPendingIds = ids; }
       renderRecent(state.recent);

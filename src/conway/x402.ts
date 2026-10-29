@@ -196,6 +196,8 @@ export async function getUsdcBalance(
   network: string = "eip155:8453",
   chainType?: ChainType,
 ): Promise<number> {
+  // Local-mode identities have no wallet; never hit an RPC for them.
+  if (address.startsWith("local:")) return 0;
   if (chainType === "solana" || network === "solana:mainnet") {
     return getSolanaUsdcBalance(address);
   }

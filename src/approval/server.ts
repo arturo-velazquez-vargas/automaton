@@ -27,6 +27,8 @@ export interface ApprovalServerOptions {
   port: number;
   host?: string;
   getAgentState?: () => string;
+  /** Local-mode ledger balance, shown in the dashboard header. */
+  getBalanceCents?: () => number;
 }
 
 export interface ApprovalServer {
@@ -51,6 +53,7 @@ export async function startApprovalServer(options: ApprovalServerOptions): Promi
       if (req.method === "GET" && url.pathname === "/api/state") {
         sendJson(res, 200, {
           agentState: options.getAgentState?.() ?? "unknown",
+          balanceCents: options.getBalanceCents?.() ?? null,
           pending: listPendingApprovals(db),
           recent: listRecentApprovals(db, 30),
         });

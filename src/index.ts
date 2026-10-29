@@ -29,8 +29,13 @@ import { createSocialClient } from "./social/client.js";
 import { PolicyEngine } from "./agent/policy-engine.js";
 import { SpendTracker } from "./agent/spend-tracker.js";
 import { createDefaultRules } from "./agent/policy-rules/index.js";
-import type { AutomatonIdentity, AgentState, Skill, SocialClientInterface } from "./types.js";
-import { DEFAULT_TREASURY_POLICY, DEFAULT_APPROVAL_CONFIG } from "./types.js";
+import type { AutomatonIdentity, AgentState, Skill, SocialClientInterface, AutomatonConfig, AutomatonDatabase, ConwayClient, HeartbeatConfig } from "./types.js";
+import type { PrivateKeyAccount } from "viem";
+import type { ChainIdentity, ChainType } from "./identity/chain.js";
+import { Ledger } from "./local/ledger.js";
+import { createLocalProvider } from "./local/provider.js";
+import { createLocalIdentity } from "./local/identity.js";
+import { DEFAULT_TREASURY_POLICY, DEFAULT_APPROVAL_CONFIG, DEFAULT_LOCAL_CONFIG } from "./types.js";
 import { ApprovalGate } from "./approval/gate.js";
 import { startApprovalServer, type ApprovalServer } from "./approval/server.js";
 import { notifyApprovalRequest } from "./approval/notify.js";
@@ -66,6 +71,7 @@ Usage:
   automaton --init         Initialize wallet and config directory
   automaton --provision    Provision Conway API key via SIWE
   automaton --status       Show current automaton status
+  automaton --fund <usd>   Add USD to the local ledger (local mode)
   automaton --version      Show version
   automaton --help         Show this help
 
@@ -106,6 +112,30 @@ Environment:
       logger.error(`Provision failed: ${err.message}`);
       process.exit(1);
     }
+    process.exit(0);
+  }
+
+  if (args.includes("--fund")) {
+    const raw = args[args.indexOf("--fund") + 1];
+    const usd = Number(raw);
+    if (!raw || !Number.isFinite(usd) || usd <= 0) {
+      logger.error("Usage: automaton --fund <usd>   e.g. automaton --fund 25");
+      process.exit(1);
+    }
+    const config = loadConfig();
+    if (!config) {
+      logger.error("Automaton is not configured. Run: automaton --run");
+      process.exit(1);
+    }
+    if (config.runtimeMode === "conway") {
+      logger.error("--fund only applies to local mode. Use the creator CLI for Conway credits.");
+      process.exit(1);
+    }
+    const db = createDatabase(resolvePath(config.dbPath));
+    const ledger = new Ledger(db.raw);
+    ledger.credit(Math.round(usd * 100), "creator funding", "cli");
+    logger.info(`Funded $${usd.toFixed(2)}. Balance: $${(ledger.balanceCents() / 100).toFixed(2)}`);
+    db.close();
     process.exit(0);
   }
 
@@ -178,6 +208,7 @@ Children:   ${children.filter((c) => c.status !== "dead").length} alive / ${chil
 Agent ID:   ${registry?.agentId || "not registered"}
 Model:      ${config.inferenceModel}
 Approval:   ${config.approval?.mode ?? "risky"} (dashboard :${config.approval?.dashboardPort ?? 7777})
+Mode:       ${config.runtimeMode ?? "local"}${config.runtimeMode !== "conway" ? ` (balance $${(new Ledger(db.raw).balanceCents() / 100).toFixed(2)})` : ""}
 Version:    ${config.version}
 ========================
 `);
@@ -193,93 +224,26 @@ async function run(): Promise<void> {
   // Load config — first run triggers interactive setup wizard
   let config = loadConfig();
   if (!config) {
-    const { runSetupWizard } = await import("./setup/wizard.js");
-    config = await runSetupWizard();
+    if (process.env.AUTOMATON_RUNTIME_MODE === "conway") {
+      const { runSetupWizard } = await import("./setup/wizard.js");
+      config = await runSetupWizard();
+    } else {
+      const { runLocalSetupWizard } = await import("./setup/local-wizard.js");
+      config = await runLocalSetupWizard();
+    }
   }
 
-  // Load wallet (chain-aware)
-  const { account, chainIdentity, chainType: walletChainType } = await getWallet();
-  const resolvedChainType = config.chainType || walletChainType || "evm";
-  const apiKey = config.conwayApiKey || loadApiKeyFromConfig();
-  if (!apiKey) {
-    logger.error("No API key found. Run: automaton --provision");
-    process.exit(1);
-  }
+  const isLocalMode = config.runtimeMode !== "conway";
 
   // Initialize database
   const dbPath = resolvePath(config.dbPath);
   const db = createDatabase(dbPath);
 
-  // Persist createdAt: only set if not already stored (never overwrite)
-  const existingCreatedAt = db.getIdentity("createdAt");
-  const createdAt = existingCreatedAt || new Date().toISOString();
-  if (!existingCreatedAt) {
-    db.setIdentity("createdAt", createdAt);
-  }
-
-  // Build identity (chain-aware)
-  const identity: AutomatonIdentity = {
-    name: config.name,
-    address: chainIdentity.address,
-    account,
-    creatorAddress: config.creatorAddress,
-    sandboxId: config.sandboxId,
-    apiKey,
-    createdAt,
-    chainType: resolvedChainType,
-    chainIdentity,
-  };
-
-  // Store identity in DB
-  db.setIdentity("name", config.name);
-  db.setIdentity("address", chainIdentity.address);
-  db.setIdentity("creator", config.creatorAddress);
-  db.setIdentity("chainType", resolvedChainType);
-  db.setIdentity("sandbox", config.sandboxId);
-  const storedAutomatonId = db.getIdentity("automatonId");
-  const automatonId = storedAutomatonId || config.sandboxId || randomUUID();
-  if (!storedAutomatonId) {
-    db.setIdentity("automatonId", automatonId);
-  }
-
-  // Create Conway client
-  const conway = createConwayClient({
-    apiUrl: config.conwayApiUrl,
-    apiKey,
-    sandboxId: config.sandboxId,
-  });
-
-  // Register automaton identity (one-time, immutable)
-  const registrationState = db.getIdentity("conwayRegistrationStatus");
-  if (registrationState !== "registered") {
-    try {
-      const genesisPromptHash = config.genesisPrompt
-        ? keccak256(toHex(config.genesisPrompt))
-        : undefined;
-      await conway.registerAutomaton({
-        automatonId,
-        automatonAddress: chainIdentity.address,
-        creatorAddress: config.creatorAddress,
-        name: config.name,
-        bio: config.creatorMessage || "",
-        genesisPromptHash,
-        account,
-        chainType: resolvedChainType,
-        chainIdentity,
-      });
-      db.setIdentity("conwayRegistrationStatus", "registered");
-      logger.info(`[${new Date().toISOString()}] Automaton identity registered.`);
-    } catch (err: any) {
-      const status = err?.status;
-      if (status === 409) {
-        db.setIdentity("conwayRegistrationStatus", "conflict");
-        logger.warn(`[${new Date().toISOString()}] Automaton identity conflict: ${err.message}`);
-      } else {
-        db.setIdentity("conwayRegistrationStatus", "failed");
-        logger.warn(`[${new Date().toISOString()}] Automaton identity registration failed: ${err.message}`);
-      }
-    }
-  }
+  // Identity + infrastructure provider. Local mode: no wallet, no Conway.
+  const boot = isLocalMode ? bootstrapLocal(config, db) : await bootstrapConway(config, db);
+  const { identity, conway, ledger } = boot;
+  const apiKey = identity.apiKey;
+  logger.info(`[${new Date().toISOString()}] Runtime mode: ${isLocalMode ? "local" : "conway"}`);
 
   // Resolve Ollama base URL: env var takes precedence over config
   const ollamaBaseUrl = process.env.OLLAMA_BASE_URL || config.ollamaBaseUrl;
@@ -293,7 +257,7 @@ async function run(): Promise<void> {
     apiKey,
     defaultModel: config.inferenceModel,
     maxTokens: config.maxTokensPerTurn,
-    lowComputeModel: config.modelStrategy?.lowComputeModel || "gpt-5-mini",
+    lowComputeModel: config.modelStrategy?.lowComputeModel || "claude-haiku-5-5",
     openaiApiKey: config.openaiApiKey,
     anthropicApiKey: config.anthropicApiKey,
     ollamaBaseUrl,
@@ -304,10 +268,13 @@ async function run(): Promise<void> {
     logger.info(`[${new Date().toISOString()}] Ollama backend: ${ollamaBaseUrl}`);
   }
 
-  // Create social client (chain-aware: pass ChainIdentity for Solana signing)
+  // Social relay needs a signing wallet: Conway mode only.
   let social: SocialClientInterface | undefined;
-  if (config.socialRelayUrl) {
-    social = createSocialClient(config.socialRelayUrl, resolvedChainType === "solana" ? chainIdentity : account);
+  if (!isLocalMode && config.socialRelayUrl && boot.kind === "conway") {
+    social = createSocialClient(
+      config.socialRelayUrl,
+      boot.chainType === "solana" ? boot.chainIdentity : boot.account,
+    );
     logger.info(`[${new Date().toISOString()}] Social relay: ${config.socialRelayUrl}`);
   }
 
@@ -320,6 +287,9 @@ async function run(): Promise<void> {
   // Load and sync heartbeat config
   const heartbeatConfigPath = resolvePath(config.heartbeatConfigPath);
   const heartbeatConfig = loadHeartbeatConfig(heartbeatConfigPath);
+  if (isLocalMode) {
+    disableConwayHeartbeatEntries(heartbeatConfig);
+  }
   syncHeartbeatToDb(heartbeatConfig, db);
 
   // Load skills
@@ -340,36 +310,42 @@ async function run(): Promise<void> {
     logger.warn(`[${new Date().toISOString()}] State repo init failed: ${err.message}`);
   }
 
-  // Bootstrap topup: buy minimum credits ($5) from USDC so the agent can start.
-  // The agent decides larger topups itself via the topup_credits tool.
-  try {
-    let bootstrapTimer: ReturnType<typeof setTimeout>;
-    const bootstrapTimeout = new Promise<null>((_, reject) => {
-      bootstrapTimer = setTimeout(() => reject(new Error("bootstrap topup timed out")), 15_000);
-    });
+  // Bootstrap topup (Conway mode): buy minimum credits ($5) from USDC so the
+  // agent can start. The agent decides larger topups itself via topup_credits.
+  if (boot.kind === "conway") {
     try {
-      await Promise.race([
-        (async () => {
-          const creditsCents = await conway.getCreditsBalance().catch(() => 0);
-          const topupResult = await bootstrapTopup({
-            apiUrl: config.conwayApiUrl,
-            account,
-            creditsCents,
-            chainType: resolvedChainType,
-          });
-          if (topupResult?.success) {
-            logger.info(
-              `[${new Date().toISOString()}] Bootstrap topup: +$${topupResult.amountUsd} credits from USDC`,
-            );
-          }
-        })(),
-        bootstrapTimeout,
-      ]);
-    } finally {
-      clearTimeout(bootstrapTimer!);
+      let bootstrapTimer: ReturnType<typeof setTimeout>;
+      const bootstrapTimeout = new Promise<null>((_, reject) => {
+        bootstrapTimer = setTimeout(() => reject(new Error("bootstrap topup timed out")), 15_000);
+      });
+      try {
+        await Promise.race([
+          (async () => {
+            const creditsCents = await conway.getCreditsBalance().catch(() => 0);
+            const topupResult = await bootstrapTopup({
+              apiUrl: config.conwayApiUrl,
+              account: boot.account,
+              creditsCents,
+              chainType: boot.chainType,
+            });
+            if (topupResult?.success) {
+              logger.info(
+                `[${new Date().toISOString()}] Bootstrap topup: +$${topupResult.amountUsd} credits from USDC`,
+              );
+            }
+          })(),
+          bootstrapTimeout,
+        ]);
+      } finally {
+        clearTimeout(bootstrapTimer!);
+      }
+    } catch (err: any) {
+      logger.warn(`[${new Date().toISOString()}] Bootstrap topup skipped: ${err.message}`);
     }
-  } catch (err: any) {
-    logger.warn(`[${new Date().toISOString()}] Bootstrap topup skipped: ${err.message}`);
+  } else {
+    logger.info(
+      `[${new Date().toISOString()}] Ledger balance: $${(ledger!.balanceCents() / 100).toFixed(2)}. Fund with: automaton --fund <usd>`,
+    );
   }
 
   // Start heartbeat daemon (Phase 1.1: DurableScheduler)
@@ -400,6 +376,7 @@ async function run(): Promise<void> {
       db: db.raw,
       port: approvalConfig.dashboardPort,
       getAgentState: () => db.getAgentState(),
+      getBalanceCents: ledger ? () => ledger.balanceCents() : undefined,
     });
     const dashboardUrl = approvalServer.url;
     approvalGate = new ApprovalGate(db.raw, {
@@ -456,6 +433,9 @@ async function run(): Promise<void> {
           logger.info(`[${new Date().toISOString()}] State: ${state}`);
         },
         onTurnComplete: (turn) => {
+          if (ledger && turn.costCents > 0) {
+            ledger.debit(turn.costCents, "inference", turn.id);
+          }
           logger.info(
             `[${new Date().toISOString()}] Turn ${turn.id}: ${turn.toolCalls.length} tools, ${turn.tokenUsage.totalTokens} tokens`,
           );
@@ -511,6 +491,135 @@ async function run(): Promise<void> {
       );
       // Wait before retrying
       await sleep(30_000);
+    }
+  }
+}
+
+// ─── Bootstrap: Conway mode (upstream behavior) ───────────────
+
+type ConwayBoot = {
+  kind: "conway";
+  identity: AutomatonIdentity;
+  conway: ConwayClient;
+  ledger: undefined;
+  account: PrivateKeyAccount;
+  chainIdentity: ChainIdentity;
+  chainType: ChainType;
+};
+
+type LocalBoot = {
+  kind: "local";
+  identity: AutomatonIdentity;
+  conway: ConwayClient;
+  ledger: Ledger;
+};
+
+async function bootstrapConway(config: AutomatonConfig, db: AutomatonDatabase): Promise<ConwayBoot> {
+  // Load wallet (chain-aware)
+  const { account, chainIdentity, chainType: walletChainType } = await getWallet();
+  const resolvedChainType = config.chainType || walletChainType || "evm";
+  const apiKey = config.conwayApiKey || loadApiKeyFromConfig();
+  if (!apiKey) {
+    logger.error("No API key found. Run: automaton --provision");
+    process.exit(1);
+  }
+
+  // Persist createdAt: only set if not already stored (never overwrite)
+  const existingCreatedAt = db.getIdentity("createdAt");
+  const createdAt = existingCreatedAt || new Date().toISOString();
+  if (!existingCreatedAt) {
+    db.setIdentity("createdAt", createdAt);
+  }
+
+  const identity: AutomatonIdentity = {
+    name: config.name,
+    address: chainIdentity.address,
+    account,
+    creatorAddress: config.creatorAddress,
+    sandboxId: config.sandboxId,
+    apiKey,
+    createdAt,
+    chainType: resolvedChainType,
+    chainIdentity,
+  };
+
+  db.setIdentity("name", config.name);
+  db.setIdentity("address", chainIdentity.address);
+  db.setIdentity("creator", config.creatorAddress);
+  db.setIdentity("chainType", resolvedChainType);
+  db.setIdentity("sandbox", config.sandboxId);
+  const storedAutomatonId = db.getIdentity("automatonId");
+  const automatonId = storedAutomatonId || config.sandboxId || randomUUID();
+  if (!storedAutomatonId) {
+    db.setIdentity("automatonId", automatonId);
+  }
+
+  const conway = createConwayClient({
+    apiUrl: config.conwayApiUrl,
+    apiKey,
+    sandboxId: config.sandboxId,
+  });
+
+  // Register automaton identity (one-time, immutable)
+  const registrationState = db.getIdentity("conwayRegistrationStatus");
+  if (registrationState !== "registered") {
+    try {
+      const genesisPromptHash = config.genesisPrompt
+        ? keccak256(toHex(config.genesisPrompt))
+        : undefined;
+      await conway.registerAutomaton({
+        automatonId,
+        automatonAddress: chainIdentity.address,
+        creatorAddress: config.creatorAddress,
+        name: config.name,
+        bio: config.creatorMessage || "",
+        genesisPromptHash,
+        account,
+        chainType: resolvedChainType,
+        chainIdentity,
+      });
+      db.setIdentity("conwayRegistrationStatus", "registered");
+      logger.info(`[${new Date().toISOString()}] Automaton identity registered.`);
+    } catch (err: any) {
+      const status = err?.status;
+      if (status === 409) {
+        db.setIdentity("conwayRegistrationStatus", "conflict");
+        logger.warn(`[${new Date().toISOString()}] Automaton identity conflict: ${err.message}`);
+      } else {
+        db.setIdentity("conwayRegistrationStatus", "failed");
+        logger.warn(`[${new Date().toISOString()}] Automaton identity registration failed: ${err.message}`);
+      }
+    }
+  }
+
+  return { kind: "conway", identity, conway, ledger: undefined, account, chainIdentity, chainType: resolvedChainType };
+}
+
+// ─── Bootstrap: local mode (fork default) ─────────────────────
+
+function bootstrapLocal(config: AutomatonConfig, db: AutomatonDatabase): LocalBoot {
+  const localConfig = config.local ?? DEFAULT_LOCAL_CONFIG;
+  const identity = createLocalIdentity(db, config);
+  const ledger = new Ledger(db.raw);
+  const conway = createLocalProvider({
+    ledger,
+    workspaceDir: resolvePath(localConfig.workspaceDir),
+    execTarget:
+      localConfig.execTarget === "docker"
+        ? { kind: "docker", container: localConfig.dockerContainer || "automaton" }
+        : { kind: "host" },
+  });
+  return { kind: "local", identity, conway, ledger };
+}
+
+// WHY: these tasks poll USDC, the social relay and Conway's upstream repo.
+// None exist in local mode, so they are disabled rather than left to fail.
+const CONWAY_ONLY_HEARTBEAT_TASKS = new Set(["check_usdc_balance", "check_social_inbox", "check_for_updates"]);
+
+function disableConwayHeartbeatEntries(heartbeatConfig: HeartbeatConfig): void {
+  for (const entry of heartbeatConfig.entries) {
+    if (CONWAY_ONLY_HEARTBEAT_TASKS.has(entry.task)) {
+      entry.enabled = false;
     }
   }
 }

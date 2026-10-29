@@ -815,7 +815,8 @@ describe("Agent Loop", () => {
 
     await runAgentLoop({
       identity,
-      config,
+      // Orchestration only runs in conway mode; local mode is single-agent.
+      config: { ...config, runtimeMode: "conway" },
       db,
       conway,
       inference,
@@ -863,7 +864,8 @@ describe("Agent Loop", () => {
 
     await runAgentLoop({
       identity,
-      config,
+      // Orchestration only runs in conway mode; local mode is single-agent.
+      config: { ...config, runtimeMode: "conway" },
       db,
       conway,
       inference,

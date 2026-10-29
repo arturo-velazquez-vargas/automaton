@@ -77,7 +77,30 @@ export interface AutomatonConfig {
   chainType?: ChainType;
   /** Human-in-the-loop approval policy for tool calls. */
   approval?: ApprovalConfig;
+  /** "local": no wallet, no Conway; budget is a USD ledger. "conway": upstream behavior. */
+  runtimeMode?: RuntimeMode;
+  /** Settings that only apply in local mode. */
+  local?: LocalRuntimeConfig;
 }
+
+export type RuntimeMode = "local" | "conway";
+
+export interface LocalRuntimeConfig {
+  /** Directory used as the agent's working directory for commands and files. */
+  workspaceDir: string;
+  /** Where shell commands run. "docker" requires a running container name. */
+  execTarget: "host" | "docker";
+  dockerContainer?: string;
+}
+
+// WHY: the fork's default. Upstream behavior stays reachable by setting
+// runtimeMode to "conway" in automaton.json.
+export const DEFAULT_RUNTIME_MODE: RuntimeMode = "local";
+
+export const DEFAULT_LOCAL_CONFIG: LocalRuntimeConfig = {
+  workspaceDir: "~/.automaton/workspace",
+  execTarget: "host",
+};
 
 export interface ApprovalConfig {
   /** off: never ask. risky: ask for caution/dangerous tools. all: ask for every tool. */
@@ -104,8 +127,8 @@ export const DEFAULT_APPROVAL_CONFIG: ApprovalConfig = {
 
 export const DEFAULT_CONFIG: Partial<AutomatonConfig> = {
   conwayApiUrl: "https://api.conway.tech",
-  inferenceModel: "gpt-5.2",
-  maxTokensPerTurn: 4096,
+  inferenceModel: "claude-opus-5-5",
+  maxTokensPerTurn: 16000,
   heartbeatConfigPath: "~/.automaton/heartbeat.yml",
   dbPath: "~/.automaton/state.db",
   logLevel: "info",
@@ -1271,11 +1294,14 @@ export interface ModelStrategyConfig {
   anthropicApiVersion: string; // default: "2023-06-01"
 }
 
+// WHY: single source of truth for the model strategy. The fork defaults to
+// Anthropic; Haiku on the starved tiers keeps a broke agent alive cheaply.
+// Thinking tokens count toward max_tokens on Claude, so the per-turn cap is large.
 export const DEFAULT_MODEL_STRATEGY_CONFIG: ModelStrategyConfig = {
-  inferenceModel: "gpt-5.2",
-  lowComputeModel: "gpt-5-mini",
-  criticalModel: "gpt-5-mini",
-  maxTokensPerTurn: 4096,
+  inferenceModel: "claude-opus-5-5",
+  lowComputeModel: "claude-haiku-5-5",
+  criticalModel: "claude-haiku-5-5",
+  maxTokensPerTurn: 16000,
   hourlyBudgetCents: 0,
   sessionBudgetCents: 0,
   perCallCeilingCents: 0,

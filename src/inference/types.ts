@@ -48,6 +48,50 @@ export const TASK_TIMEOUTS: Record<string, number> = {
 // Known models with realistic pricing (hundredths of cents per 1k tokens)
 
 export const STATIC_MODEL_BASELINE: Omit<ModelEntry, "lastSeen" | "createdAt" | "updatedAt">[] = [
+  // Anthropic (fork default). Prices from the Claude API price list, 2026-10:
+  // costPer1k values are hundredths of a cent per 1k tokens = $/M * 10.
+  {
+    modelId: "claude-opus-5-5",
+    provider: "anthropic",
+    displayName: "Claude Opus 5.5",
+    tierMinimum: "normal",
+    costPer1kInput: 40,    // $4.00/M
+    costPer1kOutput: 200,  // $20.00/M
+    maxTokens: 128000,
+    contextWindow: 1000000,
+    supportsTools: true,
+    supportsVision: true,
+    parameterStyle: "max_tokens",
+    enabled: true,
+  },
+  {
+    modelId: "claude-sonnet-5-5",
+    provider: "anthropic",
+    displayName: "Claude Sonnet 5.5",
+    tierMinimum: "low_compute",
+    costPer1kInput: 20,    // $2.00/M
+    costPer1kOutput: 100,  // $10.00/M
+    maxTokens: 128000,
+    contextWindow: 1000000,
+    supportsTools: true,
+    supportsVision: true,
+    parameterStyle: "max_tokens",
+    enabled: true,
+  },
+  {
+    modelId: "claude-haiku-5-5",
+    provider: "anthropic",
+    displayName: "Claude Haiku 5.5",
+    tierMinimum: "critical",
+    costPer1kInput: 1,     // $0.10/M
+    costPer1kOutput: 5,    // $0.50/M
+    maxTokens: 128000,
+    contextWindow: 1000000,
+    supportsTools: true,
+    supportsVision: true,
+    parameterStyle: "max_tokens",
+    enabled: true,
+  },
   {
     modelId: "gpt-5.2",
     provider: "openai",
@@ -177,14 +221,5 @@ export const DEFAULT_ROUTING_MATRIX: RoutingMatrix = {
 
 // === Default Model Strategy Config ===
 
-export const DEFAULT_MODEL_STRATEGY_CONFIG: ModelStrategyConfig = {
-  inferenceModel: "gpt-5.2",
-  lowComputeModel: "gpt-5-mini",
-  criticalModel: "gpt-5-mini",
-  maxTokensPerTurn: 4096,
-  hourlyBudgetCents: 0,
-  sessionBudgetCents: 0,
-  perCallCeilingCents: 0,
-  enableModelFallback: true,
-  anthropicApiVersion: "2023-06-01",
-};
+// Re-exported from ../types.js so there is exactly one definition.
+export { DEFAULT_MODEL_STRATEGY_CONFIG } from "../types.js";

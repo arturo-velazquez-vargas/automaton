@@ -219,7 +219,14 @@ describe("InferenceRouter", () => {
   beforeEach(() => {
     registry = new ModelRegistry(db);
     registry.initialize();
-    budget = new InferenceBudgetTracker(db, DEFAULT_MODEL_STRATEGY_CONFIG);
+    // These tests exercise the OpenAI routing matrix, so pin an OpenAI strategy
+    // (the fork's default strategy is Anthropic and takes precedence).
+    budget = new InferenceBudgetTracker(db, {
+      ...DEFAULT_MODEL_STRATEGY_CONFIG,
+      inferenceModel: "gpt-5.2",
+      lowComputeModel: "gpt-5-mini",
+      criticalModel: "gpt-5-mini",
+    });
     router = new InferenceRouter(db, registry, budget);
   });
 
@@ -954,9 +961,9 @@ describe("Inference DB Helpers", () => {
 
 describe("DEFAULT_MODEL_STRATEGY_CONFIG", () => {
   it("has sensible defaults", () => {
-    expect(DEFAULT_MODEL_STRATEGY_CONFIG.inferenceModel).toBe("gpt-5.2");
-    expect(DEFAULT_MODEL_STRATEGY_CONFIG.lowComputeModel).toBe("gpt-5-mini");
-    expect(DEFAULT_MODEL_STRATEGY_CONFIG.criticalModel).toBe("gpt-5-mini");
+    expect(DEFAULT_MODEL_STRATEGY_CONFIG.inferenceModel).toBe("claude-opus-5-5");
+    expect(DEFAULT_MODEL_STRATEGY_CONFIG.lowComputeModel).toBe("claude-haiku-5-5");
+    expect(DEFAULT_MODEL_STRATEGY_CONFIG.criticalModel).toBe("claude-haiku-5-5");
     expect(DEFAULT_MODEL_STRATEGY_CONFIG.enableModelFallback).toBe(true);
     expect(DEFAULT_MODEL_STRATEGY_CONFIG.hourlyBudgetCents).toBe(0); // no limit
     expect(DEFAULT_MODEL_STRATEGY_CONFIG.sessionBudgetCents).toBe(0); // no limit

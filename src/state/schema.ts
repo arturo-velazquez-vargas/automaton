@@ -5,7 +5,7 @@
  * The database IS the automaton's memory.
  */
 
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 export const CREATE_TABLES = `
   -- Schema version tracking
@@ -699,4 +699,21 @@ export const MIGRATION_V10 = `
 
   CREATE INDEX idx_knowledge_category ON knowledge_store(category);
   CREATE INDEX idx_knowledge_key ON knowledge_store(key);
+`;
+
+// === Local mode: USD ledger ===
+
+export const MIGRATION_V13 = `
+  -- Schema version: 13
+  -- Append-only USD ledger that backs survival tiers in local mode
+  CREATE TABLE IF NOT EXISTS ledger_entries (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL CHECK(type IN ('credit','debit')),
+    amount_cents INTEGER NOT NULL CHECK(amount_cents >= 0),
+    reason TEXT NOT NULL,
+    ref TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ledger_created ON ledger_entries(created_at);
 `;
