@@ -30,7 +30,10 @@ import { PolicyEngine } from "./agent/policy-engine.js";
 import { SpendTracker } from "./agent/spend-tracker.js";
 import { createDefaultRules } from "./agent/policy-rules/index.js";
 import type { AutomatonIdentity, AgentState, Skill, SocialClientInterface } from "./types.js";
-import { DEFAULT_TREASURY_POLICY } from "./types.js";
+import { DEFAULT_TREASURY_POLICY, DEFAULT_APPROVAL_CONFIG } from "./types.js";
+import { ApprovalGate } from "./approval/gate.js";
+import { startApprovalServer, type ApprovalServer } from "./approval/server.js";
+import { notifyApprovalRequest } from "./approval/notify.js";
 import { createLogger, setGlobalLogLevel, StructuredLogger } from "./observability/logger.js";
 import { prettySink } from "./observability/pretty-sink.js";
 import { bootstrapTopup } from "./conway/topup.js";
@@ -174,6 +177,7 @@ Heartbeats: ${heartbeats.filter((h) => h.enabled).length} active
 Children:   ${children.filter((c) => c.status !== "dead").length} alive / ${children.length} total
 Agent ID:   ${registry?.agentId || "not registered"}
 Model:      ${config.inferenceModel}
+Approval:   ${config.approval?.mode ?? "risky"} (dashboard :${config.approval?.dashboardPort ?? 7777})
 Version:    ${config.version}
 ========================
 `);
@@ -387,10 +391,33 @@ async function run(): Promise<void> {
   heartbeat.start();
   logger.info(`[${new Date().toISOString()}] Heartbeat daemon started.`);
 
+  // Creator approval gate + dashboard (fork addition)
+  const approvalConfig = config.approval ?? DEFAULT_APPROVAL_CONFIG;
+  let approvalGate: ApprovalGate | undefined;
+  let approvalServer: ApprovalServer | undefined;
+  if (approvalConfig.mode !== "off") {
+    approvalServer = await startApprovalServer({
+      db: db.raw,
+      port: approvalConfig.dashboardPort,
+      getAgentState: () => db.getAgentState(),
+    });
+    const dashboardUrl = approvalServer.url;
+    approvalGate = new ApprovalGate(db.raw, {
+      config: approvalConfig,
+      onRequest: (row) => notifyApprovalRequest(row, dashboardUrl),
+    });
+    logger.info(
+      `[${new Date().toISOString()}] Approval gate active (mode: ${approvalConfig.mode}). Dashboard: ${dashboardUrl}`,
+    );
+  } else {
+    logger.warn(`[${new Date().toISOString()}] Approval gate OFF: tools run without creator review.`);
+  }
+
   // Handle graceful shutdown
   const shutdown = () => {
     logger.info(`[${new Date().toISOString()}] Shutting down...`);
     heartbeat.stop();
+    void approvalServer?.close();
     db.setAgentState("sleeping");
     db.close();
     process.exit(0);
@@ -424,6 +451,7 @@ async function run(): Promise<void> {
         policyEngine,
         spendTracker,
         ollamaBaseUrl,
+        approvalGate,
         onStateChange: (state: AgentState) => {
           logger.info(`[${new Date().toISOString()}] State: ${state}`);
         },

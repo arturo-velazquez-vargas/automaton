@@ -75,7 +75,32 @@ export interface AutomatonConfig {
   rpcUrl?: string;
   /** Chain type for this automaton. Defaults to "evm" if absent. */
   chainType?: ChainType;
+  /** Human-in-the-loop approval policy for tool calls. */
+  approval?: ApprovalConfig;
 }
+
+export interface ApprovalConfig {
+  /** off: never ask. risky: ask for caution/dangerous tools. all: ask for every tool. */
+  mode: "off" | "risky" | "all";
+  /** How long a request may wait for the creator before it expires. */
+  timeoutMs: number;
+  /** Loopback port for the approval dashboard. */
+  dashboardPort: number;
+  /** Tool names that never need approval, regardless of mode. */
+  alwaysAllow: string[];
+  /** Tool names that always need approval, regardless of mode. */
+  alwaysAsk: string[];
+}
+
+// WHY: the fork runs on the creator's laptop, so the default is to ask before
+// anything with side effects. The upstream default (no human) is opt-in here.
+export const DEFAULT_APPROVAL_CONFIG: ApprovalConfig = {
+  mode: "risky",
+  timeoutMs: 30 * 60 * 1000,
+  dashboardPort: 7777,
+  alwaysAllow: [],
+  alwaysAsk: [],
+};
 
 export const DEFAULT_CONFIG: Partial<AutomatonConfig> = {
   conwayApiUrl: "https://api.conway.tech",
@@ -170,6 +195,8 @@ export interface ToolContext {
   conway: ConwayClient;
   inference: InferenceClient;
   social?: SocialClientInterface;
+  /** Present when the creator must approve risky tool calls before they run. */
+  approvalGate?: import("./approval/gate.js").ApprovalGate;
 }
 
 export interface SocialClientInterface {

@@ -33,9 +33,15 @@ export { DEFAULT_TOKEN_BUDGET };
  * Estimate token count from text length.
  * Conservative estimate: ~4 characters per token for English text.
  */
+const MAX_TOKENIZER_INPUT_CHARS = 20_000;
+
 export function estimateTokens(text: string): number {
   const content = text ?? "";
   const legacyEstimate = Math.ceil(content.length / 4);
+  // WHY: BPE encoding is superlinear on long degenerate input (a 500k-char run
+  // of one character takes minutes). For budgeting purposes the character
+  // heuristic is accurate enough once text is this large.
+  if (content.length > MAX_TOKENIZER_INPUT_CHARS) return legacyEstimate;
   try {
     if (!tokenCounter) {
       tokenCounter = createTokenCounter();

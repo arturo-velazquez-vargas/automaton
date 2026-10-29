@@ -3339,6 +3339,23 @@ export async function executeTool(
     }
   }
 
+  // Creator approval (if a gate is configured). Runs after the policy engine
+  // so the creator is never asked about something policy would reject anyway.
+  if (context.approvalGate?.requiresApproval(tool)) {
+    const decision = await context.approvalGate.request(tool, args);
+    if (decision.status !== "approved") {
+      const detail = decision.note ? `: ${decision.note}` : "";
+      return {
+        id: ulid(),
+        name: toolName,
+        arguments: args,
+        result: "",
+        durationMs: Date.now() - startTime,
+        error: `Creator ${decision.status} this action${detail}`,
+      };
+    }
+  }
+
   try {
     let result = await tool.execute(args, context);
 

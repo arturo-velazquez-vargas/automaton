@@ -26,6 +26,7 @@ import type {
 } from "../types.js";
 import { DEFAULT_MODEL_STRATEGY_CONFIG } from "../types.js";
 import type { PolicyEngine } from "./policy-engine.js";
+import type { ApprovalGate } from "../approval/gate.js";
 import { buildSystemPrompt, buildWakeupPrompt } from "./system-prompt.js";
 import { buildContextMessages, trimContext } from "./context.js";
 import {
@@ -84,6 +85,7 @@ export interface AgentLoopOptions {
   onStateChange?: (state: AgentState) => void;
   onTurnComplete?: (turn: AgentTurn) => void;
   ollamaBaseUrl?: string;
+  approvalGate?: ApprovalGate;
 }
 
 /**
@@ -93,7 +95,7 @@ export interface AgentLoopOptions {
 export async function runAgentLoop(
   options: AgentLoopOptions,
 ): Promise<void> {
-  const { identity, config, db, conway, inference, social, skills, policyEngine, spendTracker, onStateChange, onTurnComplete, ollamaBaseUrl } =
+  const { identity, config, db, conway, inference, social, skills, policyEngine, spendTracker, onStateChange, onTurnComplete, ollamaBaseUrl, approvalGate } =
     options;
 
   const builtinTools = createBuiltinTools(identity.sandboxId);
@@ -106,6 +108,7 @@ export async function runAgentLoop(
     conway,
     inference,
     social,
+    approvalGate,
   };
 
   // Initialize inference router (Phase 2.3)
@@ -638,6 +641,7 @@ export async function runAgentLoop(
 
       // ── Execute Tool Calls ──
       if (response.toolCalls && response.toolCalls.length > 0) {
+        if (approvalGate) approvalGate.currentReasoning = turn.thinking || undefined;
         const toolCallMessages: any[] = [];
         let callCount = 0;
         const currentInputSource = currentInput?.source as InputSource | undefined;

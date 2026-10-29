@@ -5,7 +5,7 @@
  * The database IS the automaton's memory.
  */
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 export const CREATE_TABLES = `
   -- Schema version tracking
@@ -656,6 +656,27 @@ export const MIGRATION_V11 = `
   -- Schema version: 11
   -- Add chain_type column to children table for multi-chain support
   ALTER TABLE children ADD COLUMN chain_type TEXT DEFAULT 'evm';
+`;
+
+// === Human-in-the-loop approvals ===
+
+export const MIGRATION_V12 = `
+  -- Schema version: 12
+  -- Tool calls parked until the creator approves or denies them
+  CREATE TABLE IF NOT EXISTS pending_approvals (
+    id TEXT PRIMARY KEY,
+    tool_name TEXT NOT NULL,
+    args TEXT NOT NULL DEFAULT '{}',
+    risk_level TEXT NOT NULL,
+    category TEXT NOT NULL,
+    reasoning TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','denied','expired')),
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_approvals_pending ON pending_approvals(created_at) WHERE status = 'pending';
 `;
 
 export const MIGRATION_V10 = `
