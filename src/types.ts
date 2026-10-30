@@ -121,7 +121,9 @@ export const DEFAULT_APPROVAL_CONFIG: ApprovalConfig = {
   mode: "risky",
   timeoutMs: 30 * 60 * 1000,
   dashboardPort: 7777,
-  alwaysAllow: [],
+  // WHY: sleeping is harmless and the creator can wake the agent from the
+  // dashboard, so asking for approval only blocks the creator.
+  alwaysAllow: ["sleep"],
   alwaysAsk: [],
 };
 

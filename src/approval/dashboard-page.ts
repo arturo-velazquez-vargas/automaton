@@ -45,6 +45,9 @@ export const DASHBOARD_HTML = `<!doctype html>
   button:disabled { opacity:.5; cursor:default; }
   .empty { color:var(--muted); padding:24px; text-align:center; border:1px dashed var(--border); border-radius:8px; }
   .note { color:var(--muted); font-size:12px; margin-top:6px; }
+  textarea { width:100%; min-height:72px; background:#0b0d11; border:1px solid var(--border); color:var(--text); padding:10px; border-radius:6px; font:inherit; font-size:13px; resize:vertical; }
+  button.send { background:var(--accent); color:#06101c; }
+  .msgstatus { color:var(--muted); font-size:12px; }
 </style>
 </head>
 <body>
@@ -53,6 +56,11 @@ export const DASHBOARD_HTML = `<!doctype html>
   <span class="status" id="status">connecting…</span>
 </header>
 <main>
+  <h2>Message to the agent</h2>
+  <div class="card">
+    <textarea id="msg" placeholder="Reply to the agent, give it instructions, or tell it to continue. It wakes up and reads this on its next turn."></textarea>
+    <div class="actions"><span class="msgstatus" id="msgstatus"></span><button class="send" id="sendmsg" style="margin-left:auto">Send and wake</button></div>
+  </div>
   <h2>Pending</h2>
   <div id="pending"></div>
   <h2>Recent decisions</h2>
@@ -119,6 +127,18 @@ export const DASHBOARD_HTML = `<!doctype html>
     fetch("/api/approvals/" + encodeURIComponent(id) + "/" + btn.getAttribute("data-action"), {
       method: "POST", headers: HEADERS, body: JSON.stringify({ note: note })
     }).then(function () { lastPendingIds = ""; refresh(); });
+  });
+
+  var msgEl = document.getElementById("msg");
+  var msgStatus = document.getElementById("msgstatus");
+  document.getElementById("sendmsg").addEventListener("click", function () {
+    var content = msgEl.value.trim();
+    if (!content) return;
+    msgStatus.textContent = "sending…";
+    fetch("/api/message", { method: "POST", headers: HEADERS, body: JSON.stringify({ content: content }) })
+      .then(function (res) { return res.json(); })
+      .then(function (r) { msgStatus.textContent = r.ok ? "delivered; the agent wakes within 30s" : ("error: " + (r.error || "unknown")); if (r.ok) msgEl.value = ""; })
+      .catch(function () { msgStatus.textContent = "runtime unreachable"; });
   });
 
   refresh();

@@ -285,12 +285,18 @@ async function chatViaAnthropic(params: {
     messages:
       transformed.messages.length > 0
         ? transformed.messages
-        : [{ role: "user", content: "[system] No new input. Continue with your current goals." }],
+        : [{ role: "user", content: NO_INPUT_NUDGE }],
   };
 
   if (transformed.system) {
     body.system = transformed.system;
   }
+
+  // WHY: thinking is always on for current Claude models and its text is
+  // omitted by default. A summary costs nothing extra and gives the creator
+  // something to read in the approval dashboard when the model replies with
+  // tool calls only.
+  body.thinking = { type: "adaptive", display: "summarized" };
 
   // WHY: current Claude models reject non-default sampling parameters with a
   // 400, so `temperature` is intentionally not forwarded to Anthropic.
@@ -341,10 +347,21 @@ async function chatViaAnthropic(params: {
         }))
       : undefined;
 
-  const textContent = textBlocks
+  let textContent = textBlocks
     .map((block: any) => String(block.text || ""))
     .join("\n")
     .trim();
+
+  if (!textContent) {
+    // No visible text: fall back to the summarized reasoning so the turn
+    // still carries an explanation for the log and the approval dashboard.
+    textContent = content
+      .filter((c: any) => c?.type === "thinking" && typeof c.thinking === "string")
+      .map((c: any) => c.thinking.trim())
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
 
   if (!textContent && !toolCalls?.length) {
     throw new Error("No completion content returned from anthropic inference");
@@ -371,6 +388,9 @@ async function chatViaAnthropic(params: {
     finishReason: normalizeAnthropicFinishReason(data.stop_reason),
   };
 }
+
+const NO_INPUT_NUDGE =
+  "[system] No new input from your creator. If your current work is complete, call the sleep tool now instead of spending more budget; otherwise continue with the next concrete step.";
 
 function transformMessagesForAnthropic(
   messages: ChatMessage[],
@@ -448,6 +468,15 @@ function transformMessagesForAnthropic(
         content: [toolResultBlock],
       });
     }
+  }
+
+  // WHY: current Claude models reject a conversation that ends with an
+  // assistant message ("assistant message prefill"). After a text-only turn
+  // the replayed history ends that way, so the agent is given an explicit
+  // user turn that tells it to sleep when its work is done.
+  const last = transformed[transformed.length - 1];
+  if (last && last.role === "assistant") {
+    transformed.push({ role: "user", content: NO_INPUT_NUDGE });
   }
 
   return {

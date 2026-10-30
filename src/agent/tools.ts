@@ -19,6 +19,8 @@ import type {
   InputSource,
   SpendTrackerInterface,
 } from "../types.js";
+import { DEFAULT_LOCAL_CONFIG } from "../types.js";
+import { resolvePath } from "../config.js";
 import type { PolicyEngine } from "./policy-engine.js";
 import { sanitizeToolResult, sanitizeInput } from "./injection-defense.js";
 import { createLogger } from "../observability/logger.js";
@@ -26,25 +28,35 @@ import { createLogger } from "../observability/logger.js";
 const logger = createLogger("tools");
 
 // ─── Path Confinement ─────────────────────────────────────────
-// write_file is restricted to the sandbox home directory tree.
-// The sandbox home is /root for both local and remote execution.
+// write_file is restricted to a home directory tree.
+// Conway mode: the sandbox home is /root. Local mode: the creator's real
+// home, with relative paths resolving against the agent's workspace.
 const SANDBOX_HOME = "/root";
+
+function writeRoots(ctx: ToolContext): { home: string; base: string } {
+  if (ctx.config.runtimeMode === "conway") {
+    return { home: SANDBOX_HOME, base: SANDBOX_HOME };
+  }
+  // WHY: in local mode the agent's shell runs inside the workspace, so a
+  // relative path in write_file must land where `ls` in exec would show it.
+  const home = process.env.HOME || SANDBOX_HOME;
+  const workspace = ctx.config.local?.workspaceDir || DEFAULT_LOCAL_CONFIG.workspaceDir;
+  return { home, base: resolvePath(workspace) };
+}
 
 /**
  * Validate that a file path resolves to within the allowed root directory.
  * Returns the resolved absolute path, or an error string if out of bounds.
  */
-function confinePathToSandbox(filePath: string): string | { error: string } {
-  // Resolve ~ to SANDBOX_HOME
+function confinePathToSandbox(filePath: string, ctx: ToolContext): string | { error: string } {
+  const { home, base } = writeRoots(ctx);
   const expanded = filePath.startsWith("~")
-    ? nodePath.join(SANDBOX_HOME, filePath.slice(1))
+    ? nodePath.join(home, filePath.slice(1))
     : filePath;
-  // Resolve to absolute (relative paths resolve against SANDBOX_HOME)
-  const resolved = nodePath.resolve(SANDBOX_HOME, expanded);
-  // Ensure the resolved path is within the sandbox home
-  if (resolved !== SANDBOX_HOME && !resolved.startsWith(SANDBOX_HOME + "/")) {
+  const resolved = nodePath.resolve(base, expanded);
+  if (resolved !== home && !resolved.startsWith(home + "/")) {
     return {
-      error: `Blocked: write_file path "${filePath}" resolves to "${resolved}" which is outside the allowed directory (${SANDBOX_HOME}). Writes are confined to the sandbox home.`,
+      error: `Blocked: write_file path "${filePath}" resolves to "${resolved}" which is outside the allowed directory (${home}). Writes are confined to the home directory; relative paths resolve against ${base}.`,
     };
   }
   return resolved;
@@ -159,7 +171,7 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
       execute: async (args, ctx) => {
         const filePath = args.path as string;
         // Path confinement: restrict writes to sandbox home directory
-        const confined = confinePathToSandbox(filePath);
+        const confined = confinePathToSandbox(filePath, ctx);
         if (typeof confined === "object") return confined.error;
         // Guard against overwriting protected files (same check as edit_own_file)
         const { isProtectedFile } = await import("../self-mod/code.js");

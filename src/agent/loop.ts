@@ -417,21 +417,19 @@ export async function runAgentLoop(
 
       // Check for unprocessed inbox messages using the state machine:
       // received → in_progress (claim) → processed (on success) or received/failed (on failure)
-      if (!pendingInput) {
-        claimedMessages = claimInboxMessages(db.raw, 10);
-        if (claimedMessages.length > 0) {
-          const formatted = claimedMessages
-            .map((m) => {
-              const from = sanitizeInput(m.fromAddress, m.fromAddress, "social_address");
-              const content = sanitizeInput(m.content, m.fromAddress, "social_message");
-              if (content.blocked) {
-                return `[INJECTION BLOCKED from ${from.content}]: message was blocked by safety filter`;
-              }
-              return `[Message from ${from.content}]: ${content.content}`;
-            })
-            .join("\n\n");
-          pendingInput = { content: formatted, source: "agent" };
-        }
+      // WHY: the inbox is read on every turn, not only when nothing else is
+      // pending. A creator message that wakes the agent arrives together with
+      // the wakeup input; skipping it here left the message unread while the
+      // agent went straight back to sleep.
+      claimedMessages = claimInboxMessages(db.raw, 10);
+      if (claimedMessages.length > 0) {
+        const inboxInput = formatInboxInput(claimedMessages, identity.creatorAddress);
+        pendingInput = pendingInput
+          ? {
+              content: `${pendingInput.content}\n\n${inboxInput.content}`,
+              source: inboxInput.source === "creator" ? "creator" : pendingInput.source,
+            }
+          : inboxInput;
       }
 
       // Refresh financial state periodically
@@ -944,6 +942,41 @@ export async function runAgentLoop(
   }
 
   log(config, `[LOOP END] Agent loop finished. State: ${db.getAgentState()}`);
+}
+
+/**
+ * Turn claimed inbox messages into the turn's input.
+ *
+ * WHY: messages from the creator are trusted operator input (source
+ * "creator"), which the policy engine treats differently from a stranger's
+ * message. Everything else stays untrusted and goes through the injection
+ * filter.
+ */
+export function formatInboxInput(
+  messages: Array<{ fromAddress: string; content: string }>,
+  creatorAddress: string,
+): { content: string; source: InputSource } {
+  const fromCreator = messages.filter((m) => m.fromAddress === creatorAddress);
+  const fromOthers = messages.filter((m) => m.fromAddress !== creatorAddress);
+
+  const parts: string[] = [];
+  for (const m of fromCreator) {
+    parts.push(`[Message from your creator]: ${m.content}`);
+  }
+  for (const m of fromOthers) {
+    const from = sanitizeInput(m.fromAddress, m.fromAddress, "social_address");
+    const content = sanitizeInput(m.content, m.fromAddress, "social_message");
+    if (content.blocked) {
+      parts.push(`[INJECTION BLOCKED from ${from.content}]: message was blocked by safety filter`);
+    } else {
+      parts.push(`[Message from ${from.content}]: ${content.content}`);
+    }
+  }
+
+  return {
+    content: parts.join("\n\n"),
+    source: fromCreator.length > 0 && fromOthers.length === 0 ? "creator" : "agent",
+  };
 }
 
 // ─── Helpers ───────────────────────────────────────────────────

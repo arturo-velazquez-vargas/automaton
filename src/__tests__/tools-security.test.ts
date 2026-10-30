@@ -157,7 +157,8 @@ describe("write_file / edit_own_file protection parity", () => {
     conway = new MockConwayClient();
     ctx = {
       identity: createTestIdentity(),
-      config: createTestConfig(),
+      // These tests describe the Conway sandbox, where home is /root.
+      config: createTestConfig({ runtimeMode: "conway" }),
       db,
       conway,
       inference: new MockInferenceClient(),

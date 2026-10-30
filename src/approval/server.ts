@@ -29,6 +29,8 @@ export interface ApprovalServerOptions {
   getAgentState?: () => string;
   /** Local-mode ledger balance, shown in the dashboard header. */
   getBalanceCents?: () => number;
+  /** Deliver a creator message to the agent's inbox and wake it. */
+  onCreatorMessage?: (content: string) => void;
 }
 
 export interface ApprovalServer {
@@ -57,6 +59,27 @@ export async function startApprovalServer(options: ApprovalServerOptions): Promi
           pending: listPendingApprovals(db),
           recent: listRecentApprovals(db, 30),
         });
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/message") {
+        if (req.headers[APPROVAL_HEADER] !== "1") {
+          sendJson(res, 403, { error: "missing approval header" });
+          return;
+        }
+        if (!options.onCreatorMessage) {
+          sendJson(res, 404, { error: "messaging not enabled" });
+          return;
+        }
+        const body = await readJsonBody(req);
+        const content = typeof body.content === "string" ? body.content.trim().slice(0, 4000) : "";
+        if (!content) {
+          sendJson(res, 400, { error: "content required" });
+          return;
+        }
+        options.onCreatorMessage(content);
+        logger.info(`Creator message queued (${content.length} chars)`);
+        sendJson(res, 200, { ok: true });
         return;
       }
 

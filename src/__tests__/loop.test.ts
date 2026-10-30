@@ -186,12 +186,15 @@ describe("Agent Loop", () => {
       onTurnComplete: (turn) => turns.push(turn),
     });
 
-    // One of the turns should have input from the inbox message
+    // The inbox is read on every turn, so the message arrives merged with the
+    // wakeup input of the first turn. A stranger's message never upgrades the
+    // turn's source to "creator".
     const inboxTurn = turns.find(
       (t) => t.input?.includes("Hello from another agent!"),
     );
     expect(inboxTurn).toBeDefined();
-    expect(inboxTurn!.inputSource).toBe("agent");
+    expect(inboxTurn!.input).toContain("[Message from");
+    expect(inboxTurn!.inputSource).toBe("wakeup");
   });
 
   it("MAX_TOOL_CALLS_PER_TURN limits tool calls", async () => {

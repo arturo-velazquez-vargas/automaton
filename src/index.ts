@@ -43,6 +43,7 @@ import { createLogger, setGlobalLogLevel, StructuredLogger } from "./observabili
 import { prettySink } from "./observability/pretty-sink.js";
 import { bootstrapTopup } from "./conway/topup.js";
 import { randomUUID } from "crypto";
+import { ulid } from "ulid";
 import { keccak256, toHex } from "viem";
 
 const logger = createLogger("main");
@@ -377,6 +378,18 @@ async function run(): Promise<void> {
       port: approvalConfig.dashboardPort,
       getAgentState: () => db.getAgentState(),
       getBalanceCents: ledger ? () => ledger.balanceCents() : undefined,
+      onCreatorMessage: (content) => {
+        const now = new Date().toISOString();
+        db.insertInboxMessage({
+          id: ulid(),
+          from: identity.creatorAddress,
+          to: identity.address,
+          content,
+          signedAt: now,
+          createdAt: now,
+        });
+        insertWakeEvent(db.raw, "creator", "message from creator");
+      },
     });
     const dashboardUrl = approvalServer.url;
     approvalGate = new ApprovalGate(db.raw, {
